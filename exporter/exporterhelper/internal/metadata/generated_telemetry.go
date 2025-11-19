@@ -33,6 +33,9 @@ type TelemetryBuilder struct {
 	ExporterEnqueueFailedSpans        metric.Int64Counter
 	ExporterQueueCapacity             metric.Int64ObservableGauge
 	ExporterQueueSize                 metric.Int64ObservableGauge
+	ExporterRetryDroppedLogRecords    metric.Int64Counter
+	ExporterRetryDroppedMetricPoints  metric.Int64Counter
+	ExporterRetryDroppedSpans         metric.Int64Counter
 	ExporterSendFailedLogRecords      metric.Int64Counter
 	ExporterSendFailedMetricPoints    metric.Int64Counter
 	ExporterSendFailedSpans           metric.Int64Counter
@@ -138,6 +141,24 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 		"otelcol_exporter_queue_size",
 		metric.WithDescription("Current size of the retry queue (in batches) [alpha]"),
 		metric.WithUnit("{batches}"),
+	)
+	errs = errors.Join(errs, err)
+	builder.ExporterRetryDroppedLogRecords, err = builder.meter.Int64Counter(
+		"otelcol_exporter_retry_dropped_log_records",
+		metric.WithDescription("Number of log records dropped after exhausting configured retries. [Alpha]"),
+		metric.WithUnit("{records}"),
+	)
+	errs = errors.Join(errs, err)
+	builder.ExporterRetryDroppedMetricPoints, err = builder.meter.Int64Counter(
+		"otelcol_exporter_retry_dropped_metric_points",
+		metric.WithDescription("Number of metric points dropped after exhausting configured retries. [Alpha]"),
+		metric.WithUnit("{datapoints}"),
+	)
+	errs = errors.Join(errs, err)
+	builder.ExporterRetryDroppedSpans, err = builder.meter.Int64Counter(
+		"otelcol_exporter_retry_dropped_spans",
+		metric.WithDescription("Number of spans dropped after exhausting configured retries. [Alpha]"),
+		metric.WithUnit("{spans}"),
 	)
 	errs = errors.Join(errs, err)
 	builder.ExporterSendFailedLogRecords, err = builder.meter.Int64Counter(
