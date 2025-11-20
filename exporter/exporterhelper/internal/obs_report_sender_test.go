@@ -18,6 +18,7 @@ import (
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/exporter"
+	"go.opentelemetry.io/collector/exporter/exporterhelper/internal/experr"
 	"go.opentelemetry.io/collector/exporter/exporterhelper/internal/metadatatest"
 	"go.opentelemetry.io/collector/exporter/exporterhelper/internal/request"
 	"go.opentelemetry.io/collector/exporter/exporterhelper/internal/requesttest"
@@ -238,4 +239,118 @@ func TestExportLogsOp(t *testing.T) {
 type testParams struct {
 	items int
 	err   error
+}
+
+func TestExportDroppedTraceDataOp(t *testing.T) {
+	tt := componenttest.NewTelemetry()
+	t.Cleanup(func() { require.NoError(t, tt.Shutdown(context.Background())) })
+
+	parentCtx, parentSpan := tt.NewTelemetrySettings().TracerProvider.Tracer("test").Start(context.Background(), t.Name())
+	defer parentSpan.End()
+
+	var exporterErr error
+	obsrep, err := newObsReportSender(
+		exporter.Settings{ID: exporterID, TelemetrySettings: tt.NewTelemetrySettings(), BuildInfo: component.NewDefaultBuildInfo()},
+		pipeline.SignalTraces,
+		sender.NewSender(func(context.Context, request.Request) error { return exporterErr }),
+	)
+	require.NoError(t, err)
+
+	// Test regular error - should be counted as dropped
+	exporterErr = errFake
+	require.ErrorIs(t, obsrep.Send(parentCtx, &requesttest.FakeRequest{Items: 10}), errFake)
+
+	// Test shutdown error - should NOT be counted as dropped
+	exporterErr = experr.NewShutdownErr(errors.New("shutdown"))
+	require.Error(t, obsrep.Send(parentCtx, &requesttest.FakeRequest{Items: 5}))
+
+	// Test another regular error - should be counted as dropped
+	exporterErr = errors.New("another error")
+	require.Error(t, obsrep.Send(parentCtx, &requesttest.FakeRequest{Items: 7}))
+
+	// Verify only non-shutdown errors are counted (10 + 7 = 17)
+	metadatatest.AssertEqualExporterDroppedSpans(t, tt,
+		[]metricdata.DataPoint[int64]{
+			{
+				Attributes: attribute.NewSet(
+					attribute.String("exporter", exporterID.String())),
+				Value: 17,
+			},
+		}, metricdatatest.IgnoreTimestamp(), metricdatatest.IgnoreExemplars())
+}
+
+func TestExportDroppedMetricsOp(t *testing.T) {
+	tt := componenttest.NewTelemetry()
+	t.Cleanup(func() { require.NoError(t, tt.Shutdown(context.Background())) })
+
+	parentCtx, parentSpan := tt.NewTelemetrySettings().TracerProvider.Tracer("test").Start(context.Background(), t.Name())
+	defer parentSpan.End()
+
+	var exporterErr error
+	obsrep, err := newObsReportSender(
+		exporter.Settings{ID: exporterID, TelemetrySettings: tt.NewTelemetrySettings(), BuildInfo: component.NewDefaultBuildInfo()},
+		pipeline.SignalMetrics,
+		sender.NewSender(func(context.Context, request.Request) error { return exporterErr }),
+	)
+	require.NoError(t, err)
+
+	// Test regular error - should be counted as dropped
+	exporterErr = errFake
+	require.ErrorIs(t, obsrep.Send(parentCtx, &requesttest.FakeRequest{Items: 15}), errFake)
+
+	// Test shutdown error - should NOT be counted as dropped
+	exporterErr = experr.NewShutdownErr(errors.New("shutdown"))
+	require.Error(t, obsrep.Send(parentCtx, &requesttest.FakeRequest{Items: 8}))
+
+	// Test another regular error - should be counted as dropped
+	exporterErr = errors.New("another error")
+	require.Error(t, obsrep.Send(parentCtx, &requesttest.FakeRequest{Items: 12}))
+
+	// Verify only non-shutdown errors are counted (15 + 12 = 27)
+	metadatatest.AssertEqualExporterDroppedMetricPoints(t, tt,
+		[]metricdata.DataPoint[int64]{
+			{
+				Attributes: attribute.NewSet(
+					attribute.String("exporter", exporterID.String())),
+				Value: 27,
+			},
+		}, metricdatatest.IgnoreTimestamp(), metricdatatest.IgnoreExemplars())
+}
+
+func TestExportDroppedLogsOp(t *testing.T) {
+	tt := componenttest.NewTelemetry()
+	t.Cleanup(func() { require.NoError(t, tt.Shutdown(context.Background())) })
+
+	parentCtx, parentSpan := tt.NewTelemetrySettings().TracerProvider.Tracer("test").Start(context.Background(), t.Name())
+	defer parentSpan.End()
+
+	var exporterErr error
+	obsrep, err := newObsReportSender(
+		exporter.Settings{ID: exporterID, TelemetrySettings: tt.NewTelemetrySettings(), BuildInfo: component.NewDefaultBuildInfo()},
+		pipeline.SignalLogs,
+		sender.NewSender(func(context.Context, request.Request) error { return exporterErr }),
+	)
+	require.NoError(t, err)
+
+	// Test regular error - should be counted as dropped
+	exporterErr = errFake
+	require.ErrorIs(t, obsrep.Send(parentCtx, &requesttest.FakeRequest{Items: 20}), errFake)
+
+	// Test shutdown error - should NOT be counted as dropped
+	exporterErr = experr.NewShutdownErr(errors.New("shutdown"))
+	require.Error(t, obsrep.Send(parentCtx, &requesttest.FakeRequest{Items: 10}))
+
+	// Test another regular error - should be counted as dropped
+	exporterErr = errors.New("another error")
+	require.Error(t, obsrep.Send(parentCtx, &requesttest.FakeRequest{Items: 15}))
+
+	// Verify only non-shutdown errors are counted (20 + 15 = 35)
+	metadatatest.AssertEqualExporterDroppedLogRecords(t, tt,
+		[]metricdata.DataPoint[int64]{
+			{
+				Attributes: attribute.NewSet(
+					attribute.String("exporter", exporterID.String())),
+				Value: 35,
+			},
+		}, metricdatatest.IgnoreTimestamp(), metricdatatest.IgnoreExemplars())
 }

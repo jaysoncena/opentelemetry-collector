@@ -13,6 +13,7 @@ import (
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/exporter"
+	"go.opentelemetry.io/collector/exporter/exporterhelper/internal/experr"
 	"go.opentelemetry.io/collector/exporter/exporterhelper/internal/metadata"
 	"go.opentelemetry.io/collector/exporter/exporterhelper/internal/queuebatch"
 	"go.opentelemetry.io/collector/exporter/exporterhelper/internal/request"
@@ -40,13 +41,14 @@ type obsReportSender[K request.Request] struct {
 	component.StartFunc
 	component.ShutdownFunc
 
-	spanName        string
-	tracer          trace.Tracer
-	spanAttrs       trace.SpanStartEventOption
-	metricAttr      metric.MeasurementOption
-	itemsSentInst   metric.Int64Counter
-	itemsFailedInst metric.Int64Counter
-	next            sender.Sender[K]
+	spanName         string
+	tracer           trace.Tracer
+	spanAttrs        trace.SpanStartEventOption
+	metricAttr       metric.MeasurementOption
+	itemsSentInst    metric.Int64Counter
+	itemsFailedInst  metric.Int64Counter
+	itemsDroppedInst metric.Int64Counter
+	next             sender.Sender[K]
 }
 
 func newObsReportSender[K request.Request](set exporter.Settings, signal pipeline.Signal, next sender.Sender[K]) (sender.Sender[K], error) {
@@ -70,14 +72,17 @@ func newObsReportSender[K request.Request](set exporter.Settings, signal pipelin
 	case pipeline.SignalTraces:
 		or.itemsSentInst = telemetryBuilder.ExporterSentSpans
 		or.itemsFailedInst = telemetryBuilder.ExporterSendFailedSpans
+		or.itemsDroppedInst = telemetryBuilder.ExporterDroppedSpans
 
 	case pipeline.SignalMetrics:
 		or.itemsSentInst = telemetryBuilder.ExporterSentMetricPoints
 		or.itemsFailedInst = telemetryBuilder.ExporterSendFailedMetricPoints
+		or.itemsDroppedInst = telemetryBuilder.ExporterDroppedMetricPoints
 
 	case pipeline.SignalLogs:
 		or.itemsSentInst = telemetryBuilder.ExporterSentLogRecords
 		or.itemsFailedInst = telemetryBuilder.ExporterSendFailedLogRecords
+		or.itemsDroppedInst = telemetryBuilder.ExporterDroppedLogRecords
 	}
 
 	return or, nil
@@ -115,6 +120,10 @@ func (ors *obsReportSender[K]) endOp(ctx context.Context, numLogRecords int, err
 	// No metrics recorded for profiles.
 	if ors.itemsFailedInst != nil {
 		ors.itemsFailedInst.Add(ctx, numFailedToSend, ors.metricAttr)
+	}
+	// Count all permanent drops (excluding graceful shutdown).
+	if err != nil && ors.itemsDroppedInst != nil && !experr.IsShutdownErr(err) {
+		ors.itemsDroppedInst.Add(ctx, numFailedToSend, ors.metricAttr)
 	}
 
 	span := trace.SpanFromContext(ctx)
